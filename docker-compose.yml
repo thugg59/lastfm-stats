@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      DB_TIMEZONE: ${DB_TIMEZONE}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./sql/01-timezone.sh:/docker-entrypoint-initdb.d/01-timezone.sh
+      - ./sql/02-schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  pipeline:
+    profiles: ["pipeline"]
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      LASTFM_API_KEY: ${LASTFM_API_KEY}
+      LASTFM_API_SECRET: ${LASTFM_API_SECRET}
+      LASTFM_USERNAME: ${LASTFM_USERNAME}
+      LASTFM_SESSION_KEY: ${LASTFM_SESSION_KEY}
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  postgres_data:

@@ -1,0 +1,11 @@
+.git
+.env
+data/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+all_code.txt
+README.md
+Todo
