@@ -18,7 +18,12 @@ SESSION_KEY = os.getenv("LASTFM_SESSION_KEY")
 API_URL = "https://ws.audioscrobbler.com/2.0/"
 
 if not all([API_KEY, API_SECRET, USERNAME, SESSION_KEY]):
-    logger.error("Missing required Last.fm env vars. Run auth.py first.")
+    logger.error(
+        "Missing required Last.fm environment variables. "
+        "Run auth.py first to create/update your .env file. "
+        "If you already ran auth.py, check that .env exists in the "
+        "project root and contains the required Last.fm variables."
+    )
     raise SystemExit(1)
 
 
