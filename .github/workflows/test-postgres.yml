@@ -1,0 +1,29 @@
+name: Test PostgreSQL Connection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-postgres:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/912694882726/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-actions@lastfm-data-platform.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Test PostgreSQL on VM
+        run: |
+          gcloud compute ssh lastfm-server \
+            --zone=us-central1-a \
+            --tunnel-through-iap \
+            --command="sudo -u postgres psql -d lastfm_professional -c 'SELECT current_database(), version();'"

@@ -1,0 +1,143 @@
+name: Prepare Pages Data
+
+on:
+  schedule:
+    - cron: "30 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+jobs:
+  prepare-pages-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/912694882726/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-actions@lastfm-data-platform.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Start IAP tunnel to PostgreSQL
+        run: |
+          gcloud compute start-iap-tunnel lastfm-server 5432 \
+            --local-host-port=127.0.0.1:5433 \
+            --zone=us-central1-a \
+            > iap-tunnel.log 2>&1 &
+
+          tunnel_pid=$!
+
+          for i in {1..30}; do
+            if (echo > /dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+              echo "IAP tunnel is ready."
+              break
+            fi
+
+            if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+              echo "IAP tunnel process exited unexpectedly."
+              cat iap-tunnel.log
+              exit 1
+            fi
+
+            echo "Waiting for IAP tunnel... ($i/30)"
+            sleep 1
+          done
+
+          if ! (echo > /dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+            echo "IAP tunnel did not become ready within 30 seconds."
+            cat iap-tunnel.log
+            exit 1
+          fi
+
+      - name: Generate JSON data
+        env:
+          PGPASSWORD: ${{ secrets.PERSONAL_DB_PASSWORD }}
+        run: |
+          mkdir -p data
+
+          export_json() {
+            local name="$1" query="$2"
+
+            psql -X -qAt \
+              -h 127.0.0.1 \
+              -p 5433 \
+              -U lastfm_personal_user \
+              -d lastfm_personal \
+              -v ON_ERROR_STOP=1 \
+              -c "SELECT COALESCE(json_agg(t), '[]'::json) FROM (${query}) t" \
+              > "data/${name}.json"
+          }
+
+          export_json overview \
+            "SELECT * FROM overview"
+
+          export_json top_artists \
+            "SELECT * FROM top_artists ORDER BY play_count DESC, artist"
+
+          export_json top_tracks \
+            "SELECT * FROM top_tracks ORDER BY play_count DESC, artist, track"
+
+          export_json yearly_summary \
+            "SELECT * FROM yearly_summary ORDER BY year"
+
+          export_json monthly_summary \
+            "SELECT * FROM monthly_summary ORDER BY month"
+
+          export_json hourly_listening_pattern \
+            "SELECT * FROM hourly_listening_pattern ORDER BY hour_of_day"
+
+      - name: Verify generated files
+        run: |
+
+          echo
+          echo "Validating JSON..."
+
+          expected_files=(
+            "overview.json"
+            "top_artists.json"
+            "top_tracks.json"
+            "yearly_summary.json"
+            "monthly_summary.json"
+            "hourly_listening_pattern.json"
+          )
+
+          for file in "${expected_files[@]}"; do
+            if [ ! -f "data/$file" ]; then
+              echo "MISSING: data/$file"
+              exit 1
+            fi
+
+            if python3 -m json.tool "data/$file" > /dev/null; then
+              echo "OK: data/$file"
+            else
+              echo "INVALID: data/$file"
+              exit 1
+            fi
+          done
+
+      - name: Prepare Pages site
+        run: |
+          mkdir -p site/data
+          cp data/*.json site/data/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

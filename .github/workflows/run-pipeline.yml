@@ -1,0 +1,85 @@
+name: Run Last.fm Pipeline
+
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/912694882726/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-actions@lastfm-data-platform.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Start IAP tunnel to PostgreSQL
+        run: |
+          gcloud compute start-iap-tunnel lastfm-server 5432 \
+            --local-host-port=127.0.0.1:5433 \
+            --zone=us-central1-a \
+            > iap-tunnel.log 2>&1 &
+
+          tunnel_pid=$!
+
+          for i in {1..30}; do
+            if (echo > /dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+              echo "IAP tunnel is ready."
+              break
+            fi
+
+            if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+              echo "IAP tunnel process exited unexpectedly."
+              cat iap-tunnel.log
+              exit 1
+            fi
+
+            echo "Waiting for IAP tunnel... ($i/30)"
+            sleep 1
+          done
+
+          if ! (echo > /dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+            echo "IAP tunnel did not become ready within 30 seconds."
+            cat iap-tunnel.log
+            exit 1
+          fi
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+          LASTFM_SESSION_KEY: ${{ secrets.LASTFM_SESSION_KEY }}
+
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5433
+          DB_NAME: lastfm_personal
+          DB_USER: lastfm_personal_user
+          DB_PASSWORD: ${{ secrets.PERSONAL_DB_PASSWORD }}
+        run: |
+          python -m src.pipeline

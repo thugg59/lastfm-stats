@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Last.fm Data Pipeline</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<header class="site-header">
+    <div class="container">
+        <h1>Last.fm Data Pipeline</h1>
+        <p>
+            Listening statistics generated from Last.fm scrobble data.
+        </p>
+    </div>
+</header>
+
+
+<main class="container">
+
+    <section class="overview">
+        <h2>Overview</h2>
+
+        <div class="stats-grid">
+
+            <div class="stat-card">
+                <h3>Total Scrobbles</h3>
+                <p id="total-scrobbles">—</p>
+            </div>
+
+            <div class="stat-card">
+                <h3>Unique Artists</h3>
+                <p id="unique-artists">—</p>
+            </div>
+
+            <div class="stat-card">
+                <h3>Most Played Artist</h3>
+                <p id="top-artist">—</p>
+            </div>
+
+            <div class="stat-card">
+                <h3>Most Played Track</h3>
+                <p id="top-track">—</p>
+            </div>
+
+        </div>
+    </section>
+
+
+    <section class="chart-section">
+        <h2>Top Artists</h2>
+
+        <div class="chart-container">
+            <canvas id="top-artists-chart"></canvas>
+        </div>
+    </section>
+
+
+    <section class="chart-section">
+        <h2>Top Tracks</h2>
+
+        <div class="chart-container">
+            <canvas id="top-tracks-chart"></canvas>
+        </div>
+    </section>
+
+
+    <section class="chart-section">
+        <h2>Yearly Listening</h2>
+
+        <div class="chart-container">
+            <canvas id="yearly-listening-chart"></canvas>
+        </div>
+    </section>
+
+
+    <section class="chart-section">
+        <h2>Monthly Listening</h2>
+
+        <div class="chart-container">
+            <canvas id="monthly-listening-chart"></canvas>
+        </div>
+    </section>
+
+
+    <section class="chart-section">
+        <h2>Listening by Hour</h2>
+
+        <div class="chart-container">
+            <canvas id="hourly-listening-chart"></canvas>
+        </div>
+    </section>
+
+
+    <section class="about">
+        <h2>About the Data</h2>
+
+        <p>
+            This dashboard is powered by an automated data engineering
+            pipeline that extracts listening data from the Last.fm API,
+            transforms and validates the data, and loads it into
+            PostgreSQL.
+        </p>
+
+        <p>
+            The pipeline runs automatically using GitHub Actions.
+            PostgreSQL is hosted on Google Cloud and is accessed
+            securely through an Identity-Aware Proxy tunnel.
+        </p>
+    </section>
+
+</main>
+
+
+<footer class="site-footer">
+    <div class="container">
+        <p>
+            Last.fm Data Pipeline
+        </p>
+    </div>
+</footer>
+
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>

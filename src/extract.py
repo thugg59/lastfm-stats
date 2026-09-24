@@ -1,8 +1,12 @@
 import os
+import random
+import time
 import requests
 import json
 import logging
+
 from dotenv import load_dotenv
+
 from src.config import SCROBBLES_JSON, RAW_DIR
 from src.lastfm import sign_request
 
@@ -27,6 +31,86 @@ if not all([API_KEY, API_SECRET, USERNAME, SESSION_KEY]):
     raise SystemExit(1)
 
 
+# Only used by the full-history path.
+RATE_LIMIT_DELAY = 0.25
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 2.0
+
+
+def _request_page(params, max_retries=MAX_RETRIES, base_delay=RETRY_BASE_DELAY):
+    """Fetch one Last.fm API page with authentication and retry/backoff."""
+
+    params = params.copy()
+
+    # Personal Last.fm authentication.
+    params["sk"] = SESSION_KEY
+    params["api_sig"] = sign_request(params, API_SECRET)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(
+                API_URL,
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        except requests.RequestException as e:
+            if attempt == max_retries:
+                logger.error(
+                    "Request to Last.fm API failed after %d attempts: %s",
+                    max_retries,
+                    e,
+                )
+                raise SystemExit(1)
+
+            delay = (
+                base_delay * (2 ** (attempt - 1))
+                + random.uniform(0, 0.5)
+            )
+
+            logger.warning(
+                "Request failed (attempt %d/%d): %s - retrying in %.1fs",
+                attempt,
+                max_retries,
+                e,
+                delay,
+            )
+
+            time.sleep(delay)
+            continue
+
+        data = response.json()
+
+        if "error" in data:
+            if data["error"] == 29 and attempt < max_retries:
+                delay = (
+                    base_delay * (2 ** attempt)
+                    + random.uniform(0, 1)
+                )
+
+                logger.warning(
+                    "Rate limited by Last.fm (error 29) - "
+                    "retrying in %.1fs",
+                    delay,
+                )
+
+                time.sleep(delay)
+                continue
+
+            logger.error(
+                "Last.fm API error %s: %s",
+                data["error"],
+                data.get("message", "Unknown error"),
+            )
+            raise SystemExit(1)
+
+        return data
+
+    logger.error("Exhausted retries without a successful response")
+    raise SystemExit(1)
+
+
 def fetch_scrobbles(since=None, full_history=False):
     logger.info("Fetching scrobbles from Last.fm")
 
@@ -39,7 +123,6 @@ def fetch_scrobbles(since=None, full_history=False):
             "method": "user.getrecenttracks",
             "user": USERNAME,
             "api_key": API_KEY,
-            "sk": SESSION_KEY,
             "format": "json",
             "limit": 200,
             "page": page,
@@ -48,28 +131,15 @@ def fetch_scrobbles(since=None, full_history=False):
         if since is not None:
             params["from"] = since
 
-        api_sig = sign_request(params, API_SECRET)
-        params["api_sig"] = api_sig
-
-        try:
-            response = requests.get(API_URL, params=params)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error("Request to Last.fm API failed: %s", e)
-            raise SystemExit(1)
-
-        data = response.json()
-
-        if "error" in data:
-            logger.error(
-                "Last.fm API error %s: %s",
-                data["error"],
-                data.get("message", "Unknown error"),
-            )
-            raise SystemExit(1)
+        data = _request_page(
+            params,
+            max_retries=1,
+        )
 
         if "recenttracks" not in data:
-            logger.error("Last.fm API response is missing 'recenttracks'.")
+            logger.error(
+                "Last.fm API response is missing 'recenttracks'."
+            )
             raise SystemExit(1)
 
         recenttracks = data["recenttracks"]
@@ -80,17 +150,37 @@ def fetch_scrobbles(since=None, full_history=False):
 
         all_tracks.extend(tracks)
 
-        total_pages = int(recenttracks.get("@attr", {}).get("totalPages", 1))
-        logger.info("Fetched page %d/%d (%d tracks)", page, total_pages, len(tracks))
+        total_pages = int(
+            recenttracks.get("@attr", {}).get("totalPages", 1)
+        )
+
+        logger.info(
+            "Fetched page %d/%d (%d tracks)",
+            page,
+            total_pages,
+            len(tracks),
+        )
 
         page += 1
 
         if since is None and not full_history:
-            logger.info("No 'since' cursor and full_history=False — fetching newest page only")
+            logger.info(
+                "No 'since' cursor and full_history=False - "
+                "fetching newest page only"
+            )
             break
 
-    with open(SCROBBLES_JSON, "w", encoding="utf-8") as file:
-        json.dump({"recenttracks": {"track": all_tracks}}, file, indent=4, ensure_ascii=False)
+    with open(
+        SCROBBLES_JSON,
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            {"recenttracks": {"track": all_tracks}},
+            file,
+            indent=4,
+            ensure_ascii=False,
+        )
 
     logger.info("Saved %d scrobbles total", len(all_tracks))
 
@@ -101,12 +191,15 @@ if __name__ == "__main__":
     from src.load import get_last_timestamp
 
     parser = argparse.ArgumentParser()
+
     group = parser.add_mutually_exclusive_group()
+
     group.add_argument(
         "--incremental",
         action="store_true",
         help="Fetch scrobbles since the last timestamp stored in the database",
     )
+
     group.add_argument(
         "--full-history",
         action="store_true",

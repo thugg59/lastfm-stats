@@ -51,6 +51,52 @@ def get_last_timestamp():
     return since
 
 
+def load_batch(cursor, df) -> int:
+
+    df = df[["artist", "track", "album", "timestamp"]].copy()
+
+    # timestamp may already be a string (the CSV-based incremental path reads
+    # it back as one) or a real datetime (the streaming full-history path
+    # passes cleaned datetimes straight through) - normalize to ISO strings
+    # either way so COPY always gets a consistent, known-good format.
+    df["timestamp"] = df["timestamp"].apply(
+        lambda ts: ts.isoformat() if hasattr(ts, "isoformat") else ts
+    )
+
+    df = df.astype(object).where(df.notna(), None)
+    records = list(df.itertuples(index=False, name=None))
+
+    if not records:
+        return 0
+
+    cursor.execute(
+        """
+        CREATE TEMP TABLE staged_scrobbles (
+            artist TEXT,
+            track TEXT,
+            album TEXT,
+            timestamp TIMESTAMPTZ
+        ) ON COMMIT DROP
+        """
+    )
+
+    with cursor.copy(
+        "COPY staged_scrobbles (artist, track, album, timestamp) FROM STDIN"
+    ) as copy:
+        for record in records:
+            copy.write_row(record)
+
+    cursor.execute(
+        """
+        INSERT INTO scrobbles (artist, track, album, timestamp)
+        SELECT artist, track, album, timestamp FROM staged_scrobbles
+        ON CONFLICT (artist, track, timestamp) DO NOTHING
+        """
+    )
+
+    return cursor.rowcount
+
+
 def load_scrobbles() -> None:
     logger.info("Loading scrobbles into PostgreSQL")
 
@@ -69,12 +115,7 @@ def load_scrobbles() -> None:
         )
         raise SystemExit(1)
 
-    df = df[["artist", "track", "album", "timestamp"]]
-    df = df.astype(object).where(df.notna(), None)
-
-    records = list(df.itertuples(index=False, name=None))
-
-    if not records:
+    if df.empty:
         logger.info("No records to insert.")
         return
 
@@ -87,38 +128,12 @@ def load_scrobbles() -> None:
             password=DB_PASSWORD,
         ) as conn:
             with conn.cursor() as cursor:
-
-                cursor.execute(
-                    """
-                    CREATE TEMP TABLE staged_scrobbles (
-                        artist TEXT,
-                        track TEXT,
-                        album TEXT,
-                        timestamp TIMESTAMPTZ
-                    ) ON COMMIT DROP
-                    """
-                )
-
-                with cursor.copy(
-                    "COPY staged_scrobbles (artist, track, album, timestamp) FROM STDIN"
-                ) as copy:
-                    for record in records:
-                        copy.write_row(record)
-
-                cursor.execute(
-                    """
-                    INSERT INTO scrobbles (artist, track, album, timestamp)
-                    SELECT artist, track, album, timestamp FROM staged_scrobbles
-                    ON CONFLICT (artist, track, timestamp) DO NOTHING
-                    """
-                )
-
-                inserted = cursor.rowcount
-                skipped = len(records) - inserted
+                inserted = load_batch(cursor, df)
+                skipped = len(df) - inserted
 
                 logger.info(
                     "Processed %d scrobbles: %d inserted, %d duplicates skipped",
-                    len(records), inserted, skipped,
+                    len(df), inserted, skipped,
                 )
 
     except psycopg.Error:

@@ -1,0 +1,29 @@
+name: Test GCP VM Access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-vm-access:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/912694882726/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-actions@lastfm-data-platform.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Test SSH through IAP
+        run: |
+          gcloud compute ssh lastfm-server \
+            --zone=us-central1-a \
+            --tunnel-through-iap \
+            --command="hostname"
